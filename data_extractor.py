@@ -79,8 +79,6 @@ class DataExtractor:
 		self.cnt = cnt
 		# return self
 
-
-
 	def add_new_column_by_pivot(self, index_cols, value_col, new_col_name):
 		"""
 		基于已生成的self.cross_table（求和表）和self.cnt（计数表）新增列：

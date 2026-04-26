@@ -18,10 +18,10 @@ file_path = "./0421.xlsx"   #把你的数据文件放在这个文件夹下面，
 # regression_y = "digitaltransindex"  #回归分析的因变量名称，格式是 “your_col_name”
 # regression_x = ["peer_digital"]  #回归分析的自变量名称，格式是 [“your_col_name”]，注意要放在list里，即使只有一个
 
-m1 = 0
-m2 = 1
-m3 = 0
-m_test = 0
+#下面三个变量同时只能有一个为1
+m1 = 0      #把这里置为1仅使用核心变量回归
+m2 = 0      #这里置1，使用核心变量+控制变量
+m3 = 1      #这里置1，使用核心变量+控制变量+固定效应（注意：如果使用m3，m1和m2必须为0）
 
 
 control_var = ["Size", "Lev", "ROA", "Growth", "PPE", "Age", "Board", "Dual", "Competition"]    #控制变量
@@ -46,9 +46,6 @@ elif(m2):   #加入控制变量
     regression_y = target_var
 elif(m3):   #加入固定效应
     regression_x = main_var + control_var 
-    regression_y = target_var
-elif(m_test):   #测试用
-    regression_x = main_var + control_var + effect_des
     regression_y = target_var
 else:
     pass
@@ -82,28 +79,26 @@ if __name__ == "__main__":
     #data_new中删除nnindcd列中值为c43的行
     data_new = data_new[data_new["nnindcd"] != "C43"]
 
-    if(m_test):
-        data_new = extractor.calculate_year_and_fixed_effects(index_cols=effext_src, effect_cols=effect_des, y_col=dependent_var)
+    # 只允许一个模型开关为1，避免混淆
+    model_flags = [int(bool(m1)), int(bool(m2)), int(bool(m3))]
+    if sum(model_flags) != 1:
+        raise ValueError("m1/m2/m3 必须且只能有一个为1")
 
     #回归分析
+    reg = RegressionModel(data_new, x_vars=regression_x, y_var=regression_y, method="linear")
+
     if m3:
-        # 严格对齐 Stata: xtreg y x controls i.year, fe robust
-        reg = RegressionModel(
-            data_new,
-            x_vars=regression_x,
-            y_var=regression_y,
-            method="panel_fe",
+        # 对齐 Stata: xtreg Digital PeerDigital controls i.year, fe robust
+        reg.xtfit(
             entity_col="Stkcd",
             time_col="accper",
             time_effects=True,
-            cov_type="clustered",
+            robust=True,
             cluster_entity=True,
             cluster_time=False,
         )
     else:
-        reg = RegressionModel(data_new, x_vars=regression_x, y_var=regression_y, method="linear")
-
-    reg.fit()
+        reg.fit()
     coef_result = reg.coef_and_residuals(regression_x)
     print("回归结果：")
     print(f"截距: {coef_result['intercept']}")

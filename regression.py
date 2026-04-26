@@ -11,7 +11,7 @@ class RegressionModel:
     """
     @staticmethod
     def available_methods():
-        return ['linear', 'ridge', 'lasso', 'rf', 'panel_fe']
+        return ['linear', 'ridge', 'lasso', 'rf', 'panel_fe', 'xtreg']
     
     
     def __init__(self, dataframe, x_vars, y_var, method='linear', **kwargs):
@@ -37,6 +37,9 @@ class RegressionModel:
         self.panel_result = None
         self.fitted = False
 
+    def _is_panel_method(self):
+        return self.method in ('panel_fe', 'xtreg')
+
     def _init_model(self, method, **kwargs):
         # 支持自定义回归器对象（需有fit/predict/score方法）
         if hasattr(method, 'fit') and hasattr(method, 'predict'):
@@ -52,8 +55,37 @@ class RegressionModel:
         elif method == 'panel_fe':
             # PanelOLS 在 fit 阶段依赖数据列构造，初始化时不实例化
             return None
+        elif method == 'xtreg':
+            # 通过 xtfit 执行，初始化时不实例化
+            return None
         else:
             raise ValueError(f"未知回归方法: {method}")
+
+    def xtfit(self, entity_col, time_col, time_effects=True, robust=True,
+              cluster_entity=True, cluster_time=False):
+        """
+        与 Stata xtreg 对齐的拟合入口（固定效应面板回归）。
+
+        对应关系：
+        - xtreg ..., fe            -> entity_effects=True
+        - xtreg ... i.year, fe     -> entity_effects=True, time_effects=True
+        - xtreg ..., fe robust     -> cov_type='clustered', cluster_entity=True
+        """
+        self.method = 'xtreg'
+        self.kwargs['entity_col'] = entity_col
+        self.kwargs['time_col'] = time_col
+        self.kwargs['time_effects'] = bool(time_effects)
+
+        if robust:
+            self.kwargs['cov_type'] = 'clustered'
+            self.kwargs['cluster_entity'] = bool(cluster_entity)
+            self.kwargs['cluster_time'] = bool(cluster_time)
+        else:
+            self.kwargs['cov_type'] = 'unadjusted'
+            self.kwargs['cluster_entity'] = False
+            self.kwargs['cluster_time'] = False
+
+        return self._fit_panel_fe()
 
     def _fit_panel_fe(self):
         try:
@@ -108,7 +140,7 @@ class RegressionModel:
         return self
 
     def fit(self):
-        if self.method == 'panel_fe':
+        if self._is_panel_method():
             return self._fit_panel_fe()
 
         X = self.df[self.x_vars].copy()
@@ -132,7 +164,7 @@ class RegressionModel:
     def predict(self, X=None):
         if not self.fitted:
             raise RuntimeError("请先调用fit()进行拟合")
-        if self.method == 'panel_fe':
+        if self._is_panel_method():
             if X is not None:
                 raise ValueError("panel_fe 模式暂不支持传入新 X 进行预测")
             return self.panel_result.fitted_values
@@ -153,7 +185,7 @@ class RegressionModel:
         """
         if not self.fitted:
             raise RuntimeError("请先调用fit()进行拟合")
-        if self.method == 'panel_fe':
+        if self._is_panel_method():
             # 与固定效应回归常见报告口径一致
             return float(self.panel_result.rsquared_within)
         if X is None:
@@ -182,7 +214,7 @@ class RegressionModel:
         if missing_cols:
             raise ValueError(f"以下列不在已拟合自变量中: {missing_cols}")
 
-        if self.method == 'panel_fe':
+        if self._is_panel_method():
             params = self.panel_result.params.to_dict()
             selected_coef = {col: params.get(col, np.nan) for col in x_var_list}
             residuals = self.panel_result.resids
