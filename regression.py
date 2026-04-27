@@ -218,10 +218,12 @@ class RegressionModel:
             params = self.panel_result.params.to_dict()
             selected_coef = {col: params.get(col, np.nan) for col in x_var_list}
             residuals = self.panel_result.resids
+            fitted = self.panel_result.fitted_values
             return {
                 'coefficients': selected_coef,
                 'intercept': None,
                 'residuals': residuals,
+                'fitted': fitted,
                 'std_errors': self.panel_result.std_errors.to_dict(),
                 'p_values': self.panel_result.pvalues.to_dict(),
             }
@@ -253,7 +255,8 @@ class RegressionModel:
         return {
             'coefficients': selected_coef,
             'intercept': getattr(self.model, 'intercept_', None),
-            'residuals': residuals
+            'residuals': residuals,
+            'fitted': y_pred
         }
 
     def endogeneity_test(self, endog_vars, instrument_vars, exog_vars=None, alpha=0.05):
@@ -277,8 +280,8 @@ class RegressionModel:
 
         如何根据返回值判断内生性：
         1) 原假设 H0：endog_vars 是外生的（不存在内生性）。
-        2) 若 p_value < alpha（且 reject_null=True），则拒绝 H0，判定“存在内生性”。
-        3) 若 p_value >= alpha（且 reject_null=False），则“未发现显著内生性证据”。
+        2) 若 p_value < alpha（且 reject_null=True），则拒绝 H0，判定"存在内生性"。
+        3) 若 p_value >= alpha（且 reject_null=False），则"未发现显著内生性证据"。
         """
         if not isinstance(endog_vars, list) or len(endog_vars) == 0:
             raise ValueError("endog_vars 必须是非空 list")
@@ -298,6 +301,98 @@ class RegressionModel:
         if overlap:
             raise ValueError(f"endog_vars 与 instrument_vars 不能重叠: {sorted(list(overlap))}")
 
+        # 判断是否为面板数据模式
+        is_panel = self._is_panel_method()
+        
+        if is_panel:
+            # 面板数据模式：使用 linearmodels 进行内生性检验
+            return self._endogeneity_test_panel(endog_vars, instrument_vars, exog_vars, alpha)
+        else:
+            # 普通 OLS 模式
+            return self._endogeneity_test_ols(endog_vars, instrument_vars, exog_vars, alpha)
+
+    def _endogeneity_test_panel(self, endog_vars, instrument_vars, exog_vars, alpha):
+        """面板数据模式下的内生性检验（使用 linearmodels）"""
+        try:
+            from linearmodels.panel import PanelOLS
+        except ImportError:
+            raise ImportError("请先安装 linearmodels：pip install linearmodels")
+
+        entity_col = self.kwargs.get('entity_col')
+        time_col = self.kwargs.get('time_col')
+        time_effects = self.kwargs.get('time_effects', True)
+
+        # 准备数据：包含因变量、内生变量、外生变量、工具变量、个体和时间标识
+        required_cols = list(dict.fromkeys(
+            [self.y_var] + endog_vars + exog_vars + instrument_vars + [entity_col, time_col]
+        ))
+        missing_cols = [c for c in required_cols if c not in self.df.columns]
+        if missing_cols:
+            raise ValueError(f"以下列不存在: {missing_cols}")
+
+        data = self.df[required_cols].copy()
+        data = data.replace({pd.NA: np.nan})
+        data[self.x_vars] = data[self.x_vars].apply(pd.to_numeric, errors='coerce')
+        data[self.y_var] = pd.to_numeric(data[self.y_var], errors='coerce')
+        data = data.dropna(subset=self.x_vars + [self.y_var, entity_col, time_col])
+        if data.shape[0] == 0:
+            raise ValueError("有效样本为空：请检查变量是否存在缺失值或非数值")
+
+        # 设置面板索引
+        panel_data = data.set_index([entity_col, time_col]).sort_index()
+
+        # 一阶段：每个内生变量对 外生变量 + 工具变量 回归，提取残差
+        first_stage_X_cols = exog_vars + instrument_vars
+        residual_names = []
+        
+        for v in endog_vars:
+            first_stage_model = PanelOLS(
+                panel_data[v],
+                panel_data[first_stage_X_cols],
+                entity_effects=True,
+                time_effects=time_effects,
+                drop_absorbed=True
+            ).fit(cov_type='unadjusted')
+            
+            r_name = f"__resid_{v}"
+            panel_data[r_name] = first_stage_model.resids
+            residual_names.append(r_name)
+
+        # 二阶段：因变量对 外生变量 + 内生变量 + 残差 回归
+        second_stage_vars = exog_vars + endog_vars + residual_names
+        second_stage_model = PanelOLS(
+            panel_data[self.y_var],
+            panel_data[second_stage_vars],
+            entity_effects=True,
+            time_effects=time_effects,
+            drop_absorbed=True
+        ).fit(cov_type='unadjusted')
+
+        # 联合检验残差系数是否全为 0
+        hypothesis = " = 0, ".join(residual_names) + " = 0"
+        f_test_res = second_stage_model.f_test(hypothesis)
+
+        f_stat = float(np.asarray(f_test_res.fvalue).reshape(-1)[0])
+        p_value = float(np.asarray(f_test_res.pvalue).reshape(-1)[0])
+        reject_null = p_value < alpha
+        has_endogeneity = reject_null
+
+        return {
+            'test_name': 'Durbin-Wu-Hausman (panel control function)',
+            'n_obs': int(panel_data.shape[0]),
+            'endog_vars': endog_vars,
+            'instrument_vars': instrument_vars,
+            'exog_vars': exog_vars,
+            'test_stat': f_stat,
+            'p_value': p_value,
+            'alpha': alpha,
+            'reject_null': reject_null,
+            'has_endogeneity': has_endogeneity,
+            'conclusion': '存在内生性' if has_endogeneity else '未发现显著内生性证据'
+        }
+
+    def _endogeneity_test_ols(self, endog_vars, instrument_vars, exog_vars, alpha):
+        """普通 OLS 模式下的内生性检验（使用 statsmodels）"""
         required_cols = list(dict.fromkeys([self.y_var] + endog_vars + exog_vars + instrument_vars))
         missing_cols = [c for c in required_cols if c not in self.df.columns]
         if missing_cols:
@@ -346,8 +441,6 @@ class RegressionModel:
             'conclusion': '存在内生性' if has_endogeneity else '未发现显著内生性证据'
         }
 
-    
-    
 
 # 示例用法：
 # reg = RegressionModel(df, x_vars=['x1', 'x2'], y_var='y', method='ridge', alpha=1.0)

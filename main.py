@@ -4,7 +4,7 @@ from data_loader import DataLoader
 from regression import RegressionModel
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
-
+import numpy as np
 
 
 #global var
@@ -33,9 +33,17 @@ effext_src = ["accper", "Stkcd"]                                                
 effect_des = ["year_effect", "firm_effect"]                                                     #生成效应的结果
 select_list = must_var + control_var + [target_var]                                             #全部需要的列名称
 
+
 # regression_x = ["peer_digital"] + control_var 
 dependent_var = target_var
 # regression_y = "digitaltransindex_new"
+
+# ----------- 图像保存路径变量声明区（35行后） -----------
+save_path_coef = "coef_plot.png"
+save_path_resid = "resid_scatter.png"
+save_path_hist = "resid_hist.png"
+save_path_qq = "resid_qq.png"
+
 
 
 if(m1):     #只有peer_digital
@@ -53,7 +61,7 @@ else:
 
 # 内生性检验配置（可按需要调整）
 endog_vars = ["peer_digital"]
-instrument_vars = ["year_effect"]
+instrument_vars = ["accper"]  # 使用年份列作为工具变量
 exog_vars = control_var
 
 if __name__ == "__main__":
@@ -99,7 +107,9 @@ if __name__ == "__main__":
         )
     else:
         reg.fit()
+
     coef_result = reg.coef_and_residuals(regression_x)
+
     print("回归结果：")
     print(f"截距: {coef_result['intercept']}")
     print(f"回归系数: {coef_result['coefficients']}")
@@ -108,19 +118,39 @@ if __name__ == "__main__":
         print(f"稳健标准误: {coef_result['std_errors']}")
         print(f"p值: {coef_result['p_values']}")
 
-    # test_result = reg.endogeneity_test(
-    #     endog_vars=endog_vars,
-    #     instrument_vars=instrument_vars,
-    #     exog_vars=exog_vars,
-    #     alpha=0.05
-    # )
-    # print("内生性检验结果：")
-    # print(f"检验方法: {test_result['test_name']}")
-    # print(f"样本量: {test_result['n_obs']}")
-    # print(f"F统计量: {test_result['test_stat']:.6f}")
-    # print(f"p值: {test_result['p_value']:.6f}")
-    # print(f"结论: {test_result['conclusion']}")
-    
-    
+    # ----------- 绘图并保存 -----------
+    from graph import PanelPlotter
+    plotter = PanelPlotter(data_new)
+    # 1. 回归系数及置信区间图
+    coef = np.array(list(coef_result['coefficients'].values()))
+    labels = list(coef_result['coefficients'].keys())
+    if m3:
+        std_err = np.array(list(coef_result['std_errors'].values()))
+        ci_low = coef - 1.96 * std_err
+        ci_high = coef + 1.96 * std_err
+    else:
+        # 若无std_err，简单用0.1做示例
+        ci_low = coef - 0.1
+        ci_high = coef + 0.1
+    plotter.coef_plot(coef, ci_low, ci_high, labels=labels, save=True, save_path=save_path_coef)
 
-    # loader.get_info()
+    # 2. 残差散点图（残差 vs 拟合值）
+    resid = coef_result['residuals']
+    fitted = coef_result['fitted']
+    temp_df = data_new.copy()
+    import numpy as np
+    temp_df['fitted'] = np.array(fitted)
+    temp_df['residuals'] = np.array(resid)
+    plotter2 = PanelPlotter(temp_df)
+    # 2. Residuals vs Fitted Scatter Plot
+    plotter2.scatter_plot('fitted', 'residuals', save=True, save_path=save_path_resid.replace('.png', '.svg'), title='Residuals vs Fitted')
+
+    # 3. Residuals Histogram
+    plotter2.hist_plot('residuals', save=True, save_path=save_path_hist.replace('.png', '.svg'), title='Histogram of Residuals')
+
+    # 4. Residuals QQ Plot
+    plotter2.qq_plot('residuals', save=True, save_path=save_path_qq.replace('.png', '.svg'), title='QQ Plot of Residuals')
+
+    # 5. Scatter with regression line: main_var vs target_var
+    scatter_reg_save_path = 'scatter_reg_line.svg'
+    plotter.scatter_with_reg_line(main_var[0], target_var, save=True, save_path=scatter_reg_save_path, title=f'{target_var} vs {main_var[0]} with Regression Line')

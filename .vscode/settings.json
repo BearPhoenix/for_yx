@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "git push": true,
+        "/^cd /Users/bearking/Desktop/project && python3 -c \"\nwith open\\('regression\\.py', 'r', encoding='utf-8'\\) as f:\n    lines = f\\.readlines\\(\\)\n# 打印259-270行\nfor i in range\\(258, 270\\):\n    print\\(f'\\{i\\+1\\}: \\{repr\\(lines\\[i\\]\\)\\}'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
