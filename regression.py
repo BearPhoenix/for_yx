@@ -441,6 +441,7 @@ class RegressionModel:
             'conclusion': '存在内生性' if has_endogeneity else '未发现显著内生性证据'
         }
 
+    
 
 # 示例用法：
 # reg = RegressionModel(df, x_vars=['x1', 'x2'], y_var='y', method='ridge', alpha=1.0)

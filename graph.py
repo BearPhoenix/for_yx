@@ -3,6 +3,8 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
+import pandas as pd
 
 class PanelPlotter:		
 	def __init__(self, df):
@@ -32,6 +34,69 @@ class PanelPlotter:
 		ax.axvline(0, color='grey', linestyle='--', lw=1)
 		ax.set_title(title)
 		self._set_axis_scale(ax, yscale=yscale)
+		plt.tight_layout()
+		if save and save_path:
+			plt.savefig(save_path, dpi=300, bbox_inches='tight')
+		plt.show()
+
+	def scatter_with_custom_curve(self, x_col, y_col, curve_func, xscale=None, yscale=None, title=None, save=False, save_path=None, curve_label='Custom Curve'):
+		"""
+		绘制原始数据散点图，并叠加自定义回归曲线。
+		x_col: DataFrame中x轴列名
+		y_col: DataFrame中y轴列名
+		curve_func: 可调用的回归函数（如np.poly1d对象或自定义函数）
+		xscale/yscale: 支持'log'等非线性缩放
+		curve_label: 曲线图例名称
+		"""
+
+		fig, ax = plt.subplots()
+		# 绘制散点
+		sns.scatterplot(data=self.df, x=x_col, y=y_col, ax=ax, color='tab:blue', label='Data')
+
+		x = self.df[x_col].values
+		mask = ~np.isnan(x)
+		x_valid = x[mask]
+		if len(x_valid) > 0:
+			x_line = np.linspace(x_valid.min(), x_valid.max(), 200)
+			y_line = curve_func(x_line)
+			ax.plot(x_line, y_line, color='tab:orange', label=curve_label)
+
+		self._set_axis_scale(ax, xscale, yscale)
+		ax.set_title(title or f"{y_col} vs {x_col} with Custom Curve")
+		ax.legend()
+		plt.tight_layout()
+		if save and save_path:
+			plt.savefig(save_path, dpi=300, bbox_inches='tight')
+		plt.show()
+
+	def scatter_with_polyfit(self, x_col, y_col, degree=2, xscale=None, yscale=None, title=None, save=False, save_path=None):
+		"""
+		绘制原始数据散点图，并拟合高次多项式回归曲线。
+		x_col: DataFrame中x轴列名
+		y_col: DataFrame中y轴列名
+		degree: 多项式阶数（默认2，即二次）
+		xscale/yscale: 支持'log'等非线性缩放
+		"""
+		fig, ax = plt.subplots()
+		# 绘制散点
+		sns.scatterplot(data=self.df, x=x_col, y=y_col, ax=ax, color='tab:blue', label='Data')
+
+		x = self.df[x_col].values
+		y = self.df[y_col].values
+		mask = ~np.isnan(x) & ~np.isnan(y)
+		x_valid = x[mask]
+		y_valid = y[mask]
+		if len(x_valid) > degree:
+			# 多项式拟合
+			coeffs = np.polyfit(x_valid, y_valid, degree)
+			poly = np.poly1d(coeffs)
+			x_line = np.linspace(x_valid.min(), x_valid.max(), 200)
+			y_line = poly(x_line)
+			ax.plot(x_line, y_line, color='tab:orange', label=f'Poly{degree} Fit')
+
+		self._set_axis_scale(ax, xscale, yscale)
+		ax.set_title(title or f"{y_col} vs {x_col} with Poly{degree} Fit")
+		ax.legend()
 		plt.tight_layout()
 		if save and save_path:
 			plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -111,11 +176,6 @@ class PanelPlotter:
 		y_col: DataFrame中y轴列名
 		xscale/yscale: 支持'log'等非线性缩放
 		"""
-		import numpy as np
-		import matplotlib.pyplot as plt
-		import seaborn as sns
-		from sklearn.linear_model import LinearRegression
-
 		fig, ax = plt.subplots()
 		# 绘制散点
 		sns.scatterplot(data=self.df, x=x_col, y=y_col, ax=ax, color='tab:blue', label='Data')
@@ -141,6 +201,63 @@ class PanelPlotter:
 			plt.savefig(save_path, dpi=300, bbox_inches='tight')
 		plt.show()
 
-       
+	def scatter_3d_with_surface(self, dic, x_col, y_col, z_col, model, title=None, save=False, save_path=None):
+
+		fig = plt.figure()
+		ax = fig.add_subplot(111, projection='3d')
+		# 绘制原始散点
+		ax.scatter(self.df[x_col], self.df[y_col], self.df[z_col], c='b', marker='o', label='Data')
+
+		# 构造网格
+		x = self.df[x_col]
+		y = self.df[y_col]
+		x_surf, y_surf = np.meshgrid(
+			np.linspace(x.min(), x.max(), 30),
+			np.linspace(y.min(), y.max(), 30)
+		)
+		n = x_surf.ravel().shape[0]
+		columns = dic["regression_x"]  # 你的训练特征名顺序
+		X_pred = pd.DataFrame(
+			np.zeros((n, len(columns))),
+			columns=columns)
+		# 填充你要可视化的两个变量
+		X_pred[x_col] = x_surf.ravel()
+		X_pred[y_col] = y_surf.ravel()
+		if "x_2" in columns:
+			X_pred["x_2"] = x_surf.ravel() ** 2
+		if "px" in columns:
+			X_pred["px"] = x_surf.ravel() * y_surf.ravel()
+		if "px_2" in columns:
+			X_pred["px_2"] = y_surf.ravel() * x_surf.ravel() ** 2
+		X_pred.index = pd.MultiIndex.from_arrays([
+			np.zeros(n, dtype=int),  # entity_id
+			np.arange(n)             # time_id
+		], names=['entity', 'time'])
+
+
+		# 构造高次特征
+		# X_pred = np.column_stack([
+		# 	# y_surf.ravel()**2, x_surf.ravel(), y_surf.ravel()**2, x_surf.ravel()*y_surf.ravel()**2, x_surf.ravel()*y_surf.ravel()
+		# 	y_surf.ravel(),np.zeros_like(x_surf.ravel()),np.zeros_like(x_surf.ravel()),
+		# 	np.zeros_like(x_surf.ravel()),np.zeros_like(x_surf.ravel()),np.zeros_like(x_surf.ravel()),
+		# 	np.zeros_like(x_surf.ravel()),np.zeros_like(x_surf.ravel()),np.zeros_like(x_surf.ravel()),
+		# 	np.zeros_like(x_surf.ravel()),x_surf.ravel()**2,x_surf.ravel()*y_surf.ravel(),y_surf.ravel()*x_surf.ravel()**2,
+		# 	x_surf.ravel()
+		# ])
+		z_surf = model.predict(X_pred).values.reshape(x_surf.shape)
+		# 绘制拟合曲面
+		ax.plot_surface(x_surf, y_surf, z_surf, color='orange', alpha=0.5, label='Fitted Surface')
+		ax.set_xlabel(x_col)
+		ax.set_ylabel(y_col)
+		ax.set_zlabel(z_col)
+		ax.set_title(title or f'{z_col} vs {x_col} and {y_col}')
+		plt.tight_layout()
+		if save and save_path:
+			plt.savefig(save_path, dpi=300, bbox_inches='tight')
+		plt.show()
+
+
+
+
 	# 可扩展：自动高亮显著性、添加参考线、自动标注结论等
 	# 可根据需要添加更多方法

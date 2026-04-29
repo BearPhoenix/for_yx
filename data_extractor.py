@@ -298,3 +298,27 @@ class DataExtractor:
 
 		self.df[new_col_name] = self.df[raw_col] - self.df[minus_cols].sum(axis=1)
 		return self.df
+	
+	def add_high_order_col(self, base_col, order):
+		"""
+		基于指定列生成高阶项新列：base_col的order次幂
+		Args:
+			base_col (str): 基础列名
+			new_col_name (str): 新列名
+			order (int): 幂次，默认为2（即平方）
+		Returns:
+			pd.DataFrame: 新增高阶项列后的当前数据
+		"""
+		if not isinstance(base_col, str) or not base_col:
+			raise ValueError("base_col必须为非空字符串")
+		if base_col not in self.df.columns:
+			raise ValueError(f"基础列 '{base_col}' 不存在于数据框中")
+
+		if not isinstance(order, int) or order < 1:
+			raise ValueError("order必须为大于等于1的整数")
+
+		for i in range(2, order + 1):
+			intermediate_col_name = f"{base_col}_{i}"
+			self.df[intermediate_col_name] = self.df[base_col] ** i
+		# self.df[new_col_name] = self.df[base_col] ** order
+		return self.df
