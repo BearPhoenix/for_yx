@@ -19,6 +19,22 @@ class DataExtractor:
 		self.cross_table = None  # 初始化交叉表属性
 		self.cnt = None  # 初始化计数表属性
 
+	def reload_dataframe(self, new_df):
+		"""
+		重新加载DataFrame，替换当前数据
+		Args:
+			new_df (pd.DataFrame): 新的数据框
+		Returns:
+			self: 便于链式调用
+		"""
+		if not isinstance(new_df, pd.DataFrame):
+			raise ValueError("请传入pandas.DataFrame类型的数据")
+		self.df = new_df.copy()
+		self.cross_table = None  # 重置交叉表属性
+		self.cnt = None  # 重置计数表属性
+		return self
+	
+	# 删除指定列含有NA/Nan的行
 	def drop_na_rows(self, columns=None):
 		"""
 		删除指定列含有NA/Nan的行。如果不指定列，则删除所有含NA/Nan的行。
@@ -38,6 +54,7 @@ class DataExtractor:
 			self.df = self.df.dropna(subset=columns)
 		return self.df
 
+	# 对指定列的缺失值用指定的数值填充
 	def fill_na_in_columns(self, columns, fill_value):
 		"""
 		对指定列的缺失值用指定的数值填充
@@ -56,6 +73,7 @@ class DataExtractor:
 			self.df[col] = self.df[col].fillna(fill_value)
 		return self.df
 
+	# 根据两个索引列和值列生成交叉求和的新DataFrame
 	def cross_sum_dataframe(self, index_cols, value_col):
 		"""
 		根据两个索引列和值列生成交叉求和的新DataFrame。
@@ -79,6 +97,7 @@ class DataExtractor:
 		self.cnt = cnt
 		# return self
 
+	# 根据交叉表求peer_digital
 	def add_new_column_by_pivot(self, index_cols, value_col, new_col_name):
 		"""
 		基于已生成的self.cross_table（求和表）和self.cnt（计数表）新增列：
@@ -124,7 +143,7 @@ class DataExtractor:
 		self.df[new_col_name] = new_values
 		return self.df
 		
-	
+	# 计算peer digital列，基于index_cols指定的两列生成交叉求和表，并根据value_col指定的值列计算peer digital值，结果存入new_col_name指定的新列
 	def peer_digital_calculate(self, index_cols, value_col, new_col_name):
 		self.cross_sum_dataframe(index_cols, value_col)
 		# self.cross_table.to_excel("temp.xlsx")
@@ -132,7 +151,7 @@ class DataExtractor:
 		# print(self.df.shape[0])
 		return self.df
 	
-
+	# 剔除1%和99%外的异常数据
 	def remove_outliers_by_quantiles(self, columns):
 		"""
 		按分位数范围移除指定列中的异常值行。
@@ -152,24 +171,7 @@ class DataExtractor:
 			self.df = self.df[(self.df[col] >= q_low) & (self.df[col] <= q_high)]
 		return self.df
 
-	def regression_y_calculation(self, raw_y, vars, new_col_name):
-		"""
-		计算回归的因变量值。每行：raw_y - sum(vars)
-		Args:
-			raw_y (str): 原始因变量列名
-			vars (list): 需要从原始因变量中减去的变量列名列表
-			new_col_name (str): 新增回归因变量列名
-		Returns:
-			pd.DataFrame: 新增回归因变量列后的当前数据
-		"""
-		if raw_y not in self.df.columns:
-			raise ValueError(f"原始因变量列 '{raw_y}' 不存在于数据框中")
-		for var in vars:
-			if var not in self.df.columns:
-				raise ValueError(f"变量列 '{var}' 不存在于数据框中")
-		self.df[new_col_name] = self.df[raw_y] - self.df[vars].sum(axis=1)
-		return self.df
-
+    # 返回dataframe
 	def get_dataframe(self):
 		"""
 		获取当前DataFrame
@@ -177,81 +179,8 @@ class DataExtractor:
 			pd.DataFrame: 当前数据
 		"""
 		return self.df
-
-	def calculate_year_and_fixed_effects(self, index_cols, effect_cols, y_col):
-		"""
-		使用linearmodels.PanelOLS估计年份效应和个体固定效应，
-		并在self.df中新增对应列。
-
-		Args:
-			index_cols (list): 长度为2的列表，依次为[年份列名, 个体列名]
-			effect_cols (list): 长度为2的列表，依次为[年份效应列名, 固定效应列名]
-			y_col (str): 因变量列名
-
-		Returns:
-			pd.DataFrame: 新增效应列后的当前数据
-		"""
-		try:
-			from linearmodels.panel import PanelOLS
-		except ImportError:
-			raise ImportError("请先安装linearmodels：pip install linearmodels")
-
-		if not (isinstance(index_cols, list) and len(index_cols) == 2):
-			raise ValueError("index_cols必须为长度为2的list，格式为[年份列名, 个体列名]")
-		if not (isinstance(effect_cols, list) and len(effect_cols) == 2):
-			raise ValueError("effect_cols必须为长度为2的list，格式为[年份效应列名, 固定效应列名]")
-
-		year_col, entity_col = index_cols
-		year_effect_col, fixed_effect_col = effect_cols
-
-		if year_col not in self.df.columns:
-			raise ValueError(f"年份列 '{year_col}' 不存在于数据框中")
-		if entity_col not in self.df.columns:
-			raise ValueError(f"个体列 '{entity_col}' 不存在于数据框中")
-		if not isinstance(y_col, str) or not y_col:
-			raise ValueError("y_col必须为非空字符串")
-		if y_col not in self.df.columns:
-			raise ValueError(f"因变量列 '{y_col}' 不存在于数据框中")
-
-		# 保留原始行索引，便于后续合并回原表
-		work_df = self.df[[year_col, entity_col, y_col]].dropna().copy()
-		if work_df.empty:
-			raise ValueError("用于估计效应的数据为空，请检查缺失值")
-		work_df["__row_idx__"] = work_df.index
-
-		# 过滤singleton，降低自由度为0导致的除零风险
-		entity_n = work_df.groupby(entity_col)[y_col].transform("size")
-		time_n = work_df.groupby(year_col)[y_col].transform("size")
-		work_df = work_df[(entity_n > 1) & (time_n > 1)].copy()
-		if work_df.empty:
-			raise ValueError("过滤singleton后无可用样本，无法估计固定效应")
-
-		# PanelOLS要求多重索引：(entity, time)
-		panel_df = work_df.set_index([entity_col, year_col]).sort_index()
-		exog = pd.DataFrame({"const": 1.0}, index=panel_df.index)
-
-		try:
-			# 个体固定效应（entity FE）
-			entity_res = PanelOLS(panel_df[y_col], exog, entity_effects=True).fit(debiased=False)
-			panel_df[fixed_effect_col] = entity_res.estimated_effects.iloc[:, 0]
-
-			# 年份效应（time FE）
-			time_res = PanelOLS(panel_df[y_col], exog, time_effects=True).fit(debiased=False)
-			panel_df[year_effect_col] = time_res.estimated_effects.iloc[:, 0]
-		except ZeroDivisionError:
-			raise ValueError("固定效应估计失败：有效自由度为0，请检查样本量、分组数量或过度筛选")
-
-		result_df = panel_df[["__row_idx__", year_effect_col, fixed_effect_col]].reset_index(drop=True)
-
-		# 合并回原数据（未参与估计的行保留NA）
-		self.df[year_effect_col] = np.nan
-		self.df[fixed_effect_col] = np.nan
-		self.df.loc[result_df["__row_idx__"], year_effect_col] = result_df[year_effect_col].values
-		self.df.loc[result_df["__row_idx__"], fixed_effect_col] = result_df[fixed_effect_col].values
-
-		return self.df
 	
-	# 新增方法对self.df进行缩尾巴处理
+	# 对self.df进行缩尾处理
 	def tail_process(self, columns):
 		"""
 		对指定列进行缩尾处理。每列：将小于1%分位数的值替换为1%分位数，将大于99%分位数的值替换为99%分位数。
@@ -322,3 +251,136 @@ class DataExtractor:
 			self.df[intermediate_col_name] = self.df[base_col] ** i
 		# self.df[new_col_name] = self.df[base_col] ** order
 		return self.df
+
+	def add_new_col_by_2_origin(self, raw_col, minus_cols, new_col_name, op="subtract"):
+		"""
+		根据指定列生成新列：raw_col 与 minus_cols 的运算结果
+		Args:
+			raw_col (str): 原始列名
+			minus_cols (list or str): 用于运算的列名列表或单个列名
+			new_col_name (str): 新列名
+			op (str): 运算符，支持 add/+/subtract/-/multiply/*/divide/
+		Returns:
+			pd.DataFrame: 新增列后的当前数据
+		"""
+		if not isinstance(raw_col, str) or not raw_col:
+			raise ValueError("raw_col必须为非空字符串")
+		if raw_col not in self.df.columns:
+			raise ValueError(f"原始列 '{raw_col}' 不存在于数据框中")
+
+		if isinstance(minus_cols, str):
+			minus_cols = [minus_cols]
+		if not (isinstance(minus_cols, list) and len(minus_cols) > 0):
+			raise ValueError("minus_cols必须为非空list")
+		for col in minus_cols:
+			if col not in self.df.columns:
+				raise ValueError(f"运算列 '{col}' 不存在于数据框中")
+
+		if not isinstance(new_col_name, str) or not new_col_name:
+			raise ValueError("new_col_name必须为非空字符串")
+
+		op_map = {
+			"add": "+",
+			"+": "+",
+			"subtract": "-",
+			"-": "-",
+			"multiply": "*",
+			"*": "*",
+			"divide": "/",
+			"/": "/",
+		}
+		if op not in op_map:
+			raise ValueError("op必须是 add/+/subtract/-/multiply/*/divide/\/ 中的一个")
+
+		operator = op_map[op]
+		if operator in {"+", "-"}:
+			other = self.df[minus_cols].sum(axis=1)
+		else:
+			other = self.df[minus_cols].prod(axis=1)
+
+		if operator == "+":
+			self.df[new_col_name] = self.df[raw_col] + other
+		elif operator == "-":
+			self.df[new_col_name] = self.df[raw_col] - other
+		elif operator == "*":
+			self.df[new_col_name] = self.df[raw_col] * other
+		else:
+			if (other == 0).any():
+				raise ZeroDivisionError("除法运算时，minus_cols 的乘积不能包含 0")
+			self.df[new_col_name] = self.df[raw_col] / other
+
+		return self.df
+
+	def add_new_col_by_1_origin(self, raw_col, new_col_name, op):
+		"""
+		根据指定列生成新列：对指定列取对数、取指数、平方或立方运算
+		Args:
+			raw_col (str): 原始列名
+			new_col_name (str): 新列名
+			op (str): 操作类型，支持 log/exp/square/cube
+		Returns:
+			pd.DataFrame: 新增列后的当前数据
+		"""
+		if not isinstance(raw_col, str) or not raw_col:
+			raise ValueError("raw_col必须为非空字符串")
+		if raw_col not in self.df.columns:
+			raise ValueError(f"原始列 '{raw_col}' 不存在于数据框中")
+
+		if not isinstance(new_col_name, str) or not new_col_name:
+			raise ValueError("new_col_name必须为非空字符串")
+
+		if not np.issubdtype(self.df[raw_col].dtype, np.number):
+			raise ValueError(f"列 '{raw_col}' 必须是数值类型才能进行运算")
+
+		op = str(op).lower()
+		op_map = {
+			"log": "log",
+			"ln": "log",
+			"exp": "exp",
+			"square": "square",
+			"pow2": "square",
+			"cube": "cube",
+			"pow3": "cube",
+		}
+		if op not in op_map:
+			raise ValueError("op必须是 log/exp/square/cube 之一")
+
+		operation = op_map[op]
+		if operation == "log":
+			if (self.df[raw_col] <= 0).any():
+				raise ValueError("取对数时，raw_col 中的值必须全部大于 0")
+			self.df[new_col_name] = np.log(self.df[raw_col])
+		elif operation == "exp":
+			self.df[new_col_name] = np.exp(self.df[raw_col])
+		elif operation == "square":
+			self.df[new_col_name] = self.df[raw_col] ** 2
+		else:
+			self.df[new_col_name] = self.df[raw_col] ** 3
+
+		return self.df
+
+	def add_future_column(self, raw_col, new_col_name, periods=1):
+		"""
+		根据指定列生成新列：未来 n 期的值（类似于 Stata 的 F.ROA）
+		Args:
+			raw_col (str): 原始列名
+			new_col_name (str): 新列名
+			periods (int): 未来期数，默认 1
+		Returns:
+			pd.DataFrame: 新增列后的当前数据
+		"""
+		if not isinstance(raw_col, str) or not raw_col:
+			raise ValueError("raw_col必须为非空字符串")
+		if raw_col not in self.df.columns:
+			raise ValueError(f"原始列 '{raw_col}' 不存在于数据框中")
+
+		if not isinstance(new_col_name, str) or not new_col_name:
+			raise ValueError("new_col_name必须为非空字符串")
+
+		if not isinstance(periods, int) or periods <= 0:
+			raise ValueError("periods必须为大于0的整数")
+
+		self.df[new_col_name] = self.df[raw_col].shift(-periods)
+		return self.df
+	
+	

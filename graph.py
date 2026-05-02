@@ -201,38 +201,26 @@ class PanelPlotter:
 			plt.savefig(save_path, dpi=300, bbox_inches='tight')
 		plt.show()
 
-	def scatter_3d_with_surface(self, dic, x_col, y_col, z_col, model, title=None, save=False, save_path=None):
+	def scatter_3d_with_surface(self, dic, x_col, y_col, z_col, model, x_pred, title=None, save=False, save_path=None):
 
 		fig = plt.figure()
 		ax = fig.add_subplot(111, projection='3d')
 		# 绘制原始散点
 		ax.scatter(self.df[x_col], self.df[y_col], self.df[z_col], c='b', marker='o', label='Data')
 
-		# 构造网格
-		x = self.df[x_col]
-		y = self.df[y_col]
-		x_surf, y_surf = np.meshgrid(
-			np.linspace(x.min(), x.max(), 30),
-			np.linspace(y.min(), y.max(), 30)
-		)
-		n = x_surf.ravel().shape[0]
-		columns = dic["regression_x"]  # 你的训练特征名顺序
-		X_pred = pd.DataFrame(
-			np.zeros((n, len(columns))),
-			columns=columns)
-		# 填充你要可视化的两个变量
-		X_pred[x_col] = x_surf.ravel()
-		X_pred[y_col] = y_surf.ravel()
-		if "x_2" in columns:
-			X_pred["x_2"] = x_surf.ravel() ** 2
-		if "px" in columns:
-			X_pred["px"] = x_surf.ravel() * y_surf.ravel()
-		if "px_2" in columns:
-			X_pred["px_2"] = y_surf.ravel() * x_surf.ravel() ** 2
-		X_pred.index = pd.MultiIndex.from_arrays([
-			np.zeros(n, dtype=int),  # entity_id
-			np.arange(n)             # time_id
-		], names=['entity', 'time'])
+		if not isinstance(x_pred, pd.DataFrame):
+			raise ValueError("x_pred 必须是 pandas.DataFrame")
+		if x_col not in x_pred.columns or y_col not in x_pred.columns:
+			raise ValueError(f"x_pred 必须包含列 {x_col} 和 {y_col}")
+
+		x_vals = x_pred[x_col].values
+		y_vals = x_pred[y_col].values
+		unique_x = np.unique(x_vals)
+		unique_y = np.unique(y_vals)
+		if unique_x.size * unique_y.size != len(x_pred):
+			raise ValueError("x_pred 必须包含完整的 x/y 网格数据")
+
+		x_surf, y_surf = np.meshgrid(unique_x, unique_y)
 
 
 		# 构造高次特征
@@ -244,7 +232,8 @@ class PanelPlotter:
 		# 	np.zeros_like(x_surf.ravel()),x_surf.ravel()**2,x_surf.ravel()*y_surf.ravel(),y_surf.ravel()*x_surf.ravel()**2,
 		# 	x_surf.ravel()
 		# ])
-		z_surf = model.predict(X_pred).values.reshape(x_surf.shape)
+		z_pred = model.predict(x_pred)
+		z_surf = np.asarray(z_pred).reshape(x_surf.shape)
 		# 绘制拟合曲面
 		ax.plot_surface(x_surf, y_surf, z_surf, color='orange', alpha=0.5, label='Fitted Surface')
 		ax.set_xlabel(x_col)
@@ -261,3 +250,4 @@ class PanelPlotter:
 
 	# 可扩展：自动高亮显著性、添加参考线、自动标注结论等
 	# 可根据需要添加更多方法
+	

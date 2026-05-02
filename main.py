@@ -1,24 +1,15 @@
-#引用data_extractor和data_loader模块
 from data_extractor import DataExtractor
 from data_loader import DataLoader
 from regression import RegressionModel
 import pandas as pd
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
+from graph import PanelPlotter
 
-file_path = "./0421.xlsx"   #把你的数据文件放在这个文件夹下面，并把0421.xlsx改成你的文件名，注意要保持.xlsx格式
+debug_log = 0
+customer = 1
 
-#下面三个变量同时只能有一个为1
-m1 = 0      #把这里置为1仅使用核心变量回归
-m2 = 0      #这里置1，使用核心变量+控制变量
-m3 = 1      #这里置1，使用核心变量+控制变量+固定效应（注意：如果使用m3，m1和m2必须为0）
-
-#如果是高次项回归，设置这个开关为1，并在下面的high_order_terms里定义你需要的高次项
-switch_for_high_order = 1
-high_order_terms = [("peer_digital", 2)]   #定义高次项，格式是 [(base_col1, order1), (base_col2, order2), ...]
-
-
+file_path = "./0421.xlsx"
 control_var = ["Size", "Lev", "ROA", "Growth", "PPE", "Age", "Board", "Dual", "Competition"]    #控制变量
 target_var = "digitaltransindex"                                                                #被解释变量，不加入效应
 main_var = ["peer_digital"]                                                                     #核心变量
@@ -44,79 +35,53 @@ var_dict = {
     "regression_y": regression_y
 }
 
-# ----------- 图像保存路径变量声明区（35行后） -----------
 save_path_coef = "coef_plot.png"
 save_path_resid = "resid_scatter.png"
 save_path_hist = "resid_hist.png"
 save_path_qq = "resid_qq.png"
 scatter_reg_save_path = 'scatter_reg_line.svg'
 
+graph_dic = {
+    "save_path_coef": save_path_coef,
+    "save_path_resid": save_path_resid,
+    "save_path_hist": save_path_hist,
+    "save_path_qq": save_path_qq,
+}
 
-#控制是否加入效应和控制变量
-if(m1):     #只有peer_digital
-    regression_x = main_var
-    regression_y = target_var
-elif(m2):   #加入控制变量
-    regression_x = main_var + control_var 
-    regression_y = target_var
-elif(m3):   #加入固定效应
-    regression_x = main_var + control_var 
-    regression_y = target_var
-else:
-    pass
-
-
-# 内生性检验配置（可按需要调整）
-endog_vars = ["peer_digital"]
-instrument_vars = ["accper"]  # 使用年份列作为工具变量
-exog_vars = control_var
-
-
-if __name__ == "__main__":
-    # 初始化数据加载器，读取当前目录下的Excel文件
+#变量赋值
+def init_variable_by_level(dic, file_path, level):
+    """
+    初始化变量，根据level设置回归自变量
+    level=1: 只有核心变量
+    level=2: 核心变量 + 控制变量
+    level=3: 核心变量 + 控制变量 + 固定效应
+    """
     loader = DataLoader()
-    df = loader.load_excel(file_path)
-    # 从全表中获取指定列的数据
-    df = loader.get_dataframe(select_list)
-    # 注册数据清洗器
+    
+    if(level == 1):
+        dic["regression_x"] = dic["main_var"]
+    elif(level == 2):
+        dic["regression_x"] = dic["main_var"] + dic["control_var"]
+    elif(level == 3):
+        dic["regression_x"] = dic["main_var"] + dic["control_var"]
+    else:
+        raise ValueError("level取值需要小于4")
+    
+    df = loader.load_excel(file_path)    
+    df = loader.get_dataframe(dic["select_var"])
     extractor = DataExtractor(df)
-    # 清洗掉缺失值
-    data = extractor.drop_na_rows(columns=select_list)
-    #打印df的shape
-    print(f"数据的形状: {df.shape}")
-    #截尾处理异常值
-    data_new = extractor.remove_outliers_by_quantiles(columns=tail_process_list)
-    #缩尾处理
-    data_new = extractor.tail_process(columns=tail_process_list)
-    #在表格中加入peer digital列，
+    data = extractor.drop_na_rows(columns=dic["select_var"])
+    if(debug_log):
+        print(f"数据的形状: {df.shape}")
+    data_new = extractor.remove_outliers_by_quantiles(columns=dic["tail_var"])
     data_new = extractor.peer_digital_calculate(index_cols=["accper", "nnindcd"], value_col="digitaltransindex", new_col_name="peer_digital")
+    return data_new
 
-    # data_new.to_excel("processed_data.xlsx", index=False)
-    #data_new中删除nnindcd列中值为c43的行
-    data_new = data_new[data_new["nnindcd"] != "C43"]
 
-    # 只允许一个模型开关为1，避免混淆
-    model_flags = [int(bool(m1)), int(bool(m2)), int(bool(m3))]
-    if sum(model_flags) != 1:
-        raise ValueError("m1/m2/m3 必须且只能有一个为1")
-
-    if(switch_for_high_order):
-        for ele in high_order_terms:
-            data_new = extractor.add_high_order_col(ele[0], ele[1])
-        tmp = []
-        for ele in high_order_terms:
-            for j in range(2, ele[1]+1):
-                # new_col_name = f"{ele[0]}_{j}"
-                tmp.append(f"{ele[0]}_{j}")
-        print(tmp)
-        regression_x += tmp
-        select_list += tmp
-        # data_new = extractor.add_high_order_terms(data_new, high_order_terms)
-    #回归分析
-    reg = RegressionModel(data_new, x_vars=regression_x, y_var=regression_y, method="linear")
-
-    if m3:
-        # 对齐 Stata: xtreg Digital PeerDigital controls i.year, fe robust
+def regression_analysis(reg, type):
+    if(type == "reg"):
+        reg.fit()
+    elif(type == "xtreg"):
         reg.xtfit(
             entity_col="Stkcd",
             time_col="accper",
@@ -126,25 +91,22 @@ if __name__ == "__main__":
             cluster_time=False,
         )
     else:
-        reg.fit()
-
-    coef_result = reg.coef_and_residuals(regression_x)
-
+        raise ValueError("type取值只能是'reg'或'xtreg'")
+    coef_result = reg.coef_and_residuals(reg.x_vars)
     print("回归结果：")
     print(f"截距: {coef_result['intercept']}")
     print(f"回归系数: {coef_result['coefficients']}")
     print(f"R²: {reg.score():.6f}")
-    if m3:
-        print(f"稳健标准误: {coef_result['std_errors']}")
-        print(f"p值: {coef_result['p_values']}")
-
-    # ----------- 绘图并保存 -----------
-    from graph import PanelPlotter
-    plotter = PanelPlotter(data_new)
+    print(f"稳健标准误: {coef_result['std_errors']}")
+    print(f"p值: {coef_result['p_values']}")
+    
+def graph(graph_dic, data, reg, level):
+    plotter = PanelPlotter(data)
     # 1. 回归系数及置信区间图
+    coef_result = reg.coef_and_residuals(var_dict["regression_x"])
     coef = np.array(list(coef_result['coefficients'].values()))
     labels = list(coef_result['coefficients'].keys())
-    if m3:
+    if(level == 3):
         std_err = np.array(list(coef_result['std_errors'].values()))
         ci_low = coef - 1.96 * std_err
         ci_high = coef + 1.96 * std_err
@@ -152,39 +114,96 @@ if __name__ == "__main__":
         # 若无std_err，简单用0.1做示例
         ci_low = coef - 0.1
         ci_high = coef + 0.1
-    plotter.coef_plot(coef, ci_low, ci_high, labels=labels, save=True, save_path=save_path_coef)
+    plotter.coef_plot(coef, ci_low, ci_high, labels=labels, save=True, save_path=graph_dic["save_path_coef"])
 
     # 2. 残差散点图（残差 vs 拟合值）
     resid = coef_result['residuals']
     fitted = coef_result['fitted']
-    temp_df = data_new.copy()
-    import numpy as np
+    temp_df = data.copy()
     temp_df['fitted'] = np.array(fitted)
     temp_df['residuals'] = np.array(resid)
     plotter2 = PanelPlotter(temp_df)
     # 2. Residuals vs Fitted Scatter Plot
-    plotter2.scatter_plot('fitted', 'residuals', save=True, save_path=save_path_resid.replace('.png', '.svg'), title='Residuals vs Fitted')
+    plotter2.scatter_plot('fitted', 'residuals', save=True, save_path=graph_dic["save_path_resid"].replace('.png', '.svg'), title='Residuals vs Fitted')
 
     # 3. Residuals Histogram
-    plotter2.hist_plot('residuals', save=True, save_path=save_path_hist.replace('.png', '.svg'), title='Histogram of Residuals')
+    plotter2.hist_plot('residuals', save=True, save_path=graph_dic["save_path_hist"].replace('.png', '.svg'), title='Histogram of Residuals')
 
     # 4. Residuals QQ Plot
-    plotter2.qq_plot('residuals', save=True, save_path=save_path_qq.replace('.png', '.svg'), title='QQ Plot of Residuals')
+    plotter2.qq_plot('residuals', save=True, save_path=graph_dic["save_path_qq"].replace('.png', '.svg'), title='QQ Plot of Residuals')
 
-    # if(switch_for_high_order):
-    #     # 检查 main_var[0] 的分布
-    #     plotter.hist_plot(main_var[0], bins=30, save=True, save_path=f"{main_var[0]}_hist.svg", title=f"{main_var[0]} 分布直方图")
-    #     # 用回归结果绘制自定义曲线
-    #     coef_dict = coef_result['coefficients']
-    #     intercept = coef_result['intercept']
-    #     # 构造多项式系数数组，假设高次项变量名格式为 base_2, base_3 ...
-    #     degree = high_order_terms[0][1] if high_order_terms else 2
-    #     base = main_var[0]
-    #     coeffs = [coef_dict.get(f"{base}_{d}", 0) if coef_dict.get(f"{base}_{d}") is not None else 0 for d in range(degree, 1, -1)]
-    #     coeffs.append(coef_dict.get(base, 0) if coef_dict.get(base) is not None else 0)
-    #     coeffs.append(intercept if intercept is not None else 0)
-    #     poly_func = np.poly1d(coeffs)
-    #     plotter.scatter_with_custom_curve(base, target_var, poly_func, title=f'{target_var} vs {base} 回归曲线', save=True, save_path=scatter_reg_save_path)
-    # else:
-    #     # 5. Scatter with regression line: main_var vs target_var        
-    #     plotter.scatter_with_reg_line(main_var[0], target_var, save=True, save_path=scatter_reg_save_path, title=f'{target_var} vs {main_var[0]} with Regression Line')
+def graph_linear_regression(data, dic, save_path):
+    plotter = PanelPlotter(data)
+    plotter.scatter_with_reg_line(dic["main_var"][0], dic["regression_y"], save=True, save_path=save_path, title=f'{dic["regression_y"]} vs {dic["main_var"][0]} with Regression Line')
+
+#纯个性化需求，
+def graph_high_order_regression(data, dic, reg, save_path):
+    pass
+
+def main():
+    if(customer):   #在这里新增选定列
+        # ls_var = ["Analyst", "Subsidy"]
+        new_src = "Subsidy"
+        var_dict["select_var"].append(new_src)
+        pass
+    data = init_variable_by_level(var_dict, file_path, 3)
+    if(customer):
+        new_col = ["x_2", "px", "px_2"]
+        data["x_2"] = data[new_src] ** 2
+        data["px"] = data[new_src] * data["peer_digital"]
+        data["px_2"] = data["peer_digital"] * data[new_src] ** 2
+        var_dict["regression_x"] += new_col
+        var_dict["regression_x"].append(new_src)
+        new_col = []
+        pass
+    print("===============")
+    print("回归自变量列表：", var_dict["regression_x"])
+    reg = RegressionModel(data, x_vars=var_dict["regression_x"], y_var=var_dict["regression_y"], method="linear")
+    regression_analysis(reg, "xtreg")
+    # graph(graph_dic, data, reg, 3)
+    #线性回归散点图
+    # graph_linear_regression(data, var_dict, scatter_reg_save_path)
+
+    #高次回归散点图，纯粹的个性化需求，暂时不做封装了
+    if(customer):
+        # 构造用于 3D 面的预测网格 x_pred
+        x_grid = np.linspace(data[new_src].min(), data[new_src].max(), 30)
+        y_grid = np.linspace(data[var_dict["main_var"][0]].min(), data[var_dict["main_var"][0]].max(), 30)
+        xx, yy = np.meshgrid(x_grid, y_grid)
+        X_pred = pd.DataFrame(
+            np.zeros((xx.size, len(var_dict["regression_x"]))),
+            columns=var_dict["regression_x"]
+        )
+        X_pred[new_src] = xx.ravel()
+        X_pred[var_dict["main_var"][0]] = yy.ravel()
+        if "x_2" in var_dict["regression_x"]:
+            X_pred["x_2"] = X_pred[new_src] ** 2
+        if "px" in var_dict["regression_x"]:
+            X_pred["px"] = X_pred[new_src] * X_pred[var_dict["main_var"][0]]
+        if "px_2" in var_dict["regression_x"]:
+            X_pred["px_2"] = X_pred[var_dict["main_var"][0]] * X_pred[new_src] ** 2
+        X_pred.index = pd.MultiIndex.from_arrays([
+            np.zeros(xx.size, dtype=int),
+            np.arange(xx.size, dtype=int)
+        ], names=['entity', 'time'])
+
+        plotter = PanelPlotter(data)
+        plotter.scatter_3d_with_surface(
+            x_col=new_src,
+            y_col=var_dict["main_var"][0],
+            z_col=var_dict["regression_y"],
+            model=reg.model,
+            dic=var_dict,
+            x_pred=X_pred,
+            save=True,
+            save_path="./test.svg"
+        )
+
+    # 自定义
+
+
+
+if __name__ == "__main__":
+    main()
+    
+
