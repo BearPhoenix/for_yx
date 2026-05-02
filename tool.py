@@ -143,7 +143,7 @@ def graph_high_order_regression(data, dic, reg, save_path):
 def main():
     if(customer):   #在这里新增选定列
         # ls_var = ["Analyst", "Subsidy"]
-        new_src = "Analyst"
+        new_src = "Subsidy"
         var_dict["select_var"].append(new_src)
         pass
     data = init_variable_by_level(var_dict, file_path, 3)
